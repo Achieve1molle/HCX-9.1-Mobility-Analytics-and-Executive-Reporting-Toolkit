@@ -1,770 +1,397 @@
-# HCX 9.1 Mobility Analytics and Executive Reporting Toolkit Wiki
+# HCX 9.1 Mobility Analytics and Executive Reporting Toolkit
 
-This wiki is the detailed operator and maintainer guide for `HCX91_Mobility_Analytics_Executive_Report_Rev_1.0.ps1`. It describes the application workflow, reporting model, calculations, transport analytics, Path MTU mapping, evidence structure, troubleshooting approach, and release controls.
+PowerShell 7 and WPF reporting utility for collecting VMware HCX 9.1 mobility-group activity, correlating VM-level migration records, and producing an executive HTML report with supporting CSV, JSON, Excel, logging, and audit artifacts.
 
-## Contents
+**Release:** 1.0  
+**Primary script:** `HCX91_Mobility_Analytics_Executive_Report_Rev_1.0.ps1`  
+**Target platform:** Windows with PowerShell 7 or later  
+**HCX scope:** VMware HCX 9.1 in a VMware Cloud Foundation 9 environment  
+**Primary interface:** HCX REST API  
+**User interface:** Windows Presentation Foundation, WPF
 
-- [Purpose and Scope](#purpose-and-scope)
-- [Solution Architecture](#solution-architecture)
-- [Application Workflow](#application-workflow)
-- [Reporting Scope](#reporting-scope)
-- [Wave Completion](#wave-completion)
-- [Executive Metrics](#executive-metrics)
-- [Migration Status Classification](#migration-status-classification)
-- [Individual VM Timing](#individual-vm-timing)
-- [Compute Transfer Score](#compute-transfer-score)
-- [Transport Analytics](#transport-analytics)
-- [Path MTU](#path-mtu)
-- [Network Mapping and Placement](#network-mapping-and-placement)
-- [Charts](#charts)
-- [Scrollable Tables](#scrollable-tables)
-- [Exports and Artifacts](#exports-and-artifacts)
-- [Logging and Sanitization](#logging-and-sanitization)
-- [Operator Runbook](#operator-runbook)
-- [Troubleshooting](#troubleshooting)
-- [Security and Change Control](#security-and-change-control)
-- [Maintainer Notes](#maintainer-notes)
-- [Release Notes](#release-notes)
+## Overview
 
-## Purpose and Scope
+The toolkit presents a desktop interface for connecting to an HCX 9.1 Manager, selecting a reporting period, entering a migration wave name and estimated VM total, and generating a consolidated migration report.
 
-The toolkit provides executive and operational reporting for HCX 9.1 mobility activity in a VMware Cloud Foundation 9 environment.
+The report combines:
 
-The application is designed to:
+- Mobility-group status and scheduled VM totals
+- Successfully migrated, failed, and cancelled VM records
+- Wave completion against an operator-entered estimate
+- Migrated vCPU, memory, and provisioned disk totals
+- Individual VM migration duration statistics
+- Daily migration activity
+- Top-five migration charts
+- Compute Transfer Score analysis
+- HCX service-mesh transport analytics
+- Path MTU measurements
+- Destination network mappings and placement
+- Error and later-recovery status
+- Detailed time-filtered VM migration records
 
-- Authenticate to an HCX Manager.
-- Retrieve mobility-group summaries.
-- Retrieve VM migration records associated with each group.
-- Filter results by date.
-- Correlate group, VM, network, placement, transport, and error information.
-- Present a wave-level executive report.
-- Preserve evidence for troubleshooting and audit review.
+The toolkit is reporting-only. It does not create, start, cancel, or modify HCX migrations.
 
-The application does not:
+## Key Features
 
-- Build HCX migration payloads.
-- Create mobility groups.
-- Start migrations.
-- Cancel migrations.
-- Change HCX infrastructure.
-- Modify service meshes.
-- Change Path MTU.
+### Wave progress reporting
 
-## Solution Architecture
+Operators provide:
 
-### Components
+- Wave name, such as `Wave 0`
+- Estimated total VMs planned for the wave
+- Reporting start date
+- Reporting end date
 
-#### Windows automation host
+The report compares the wave estimate with unique successfully migrated VM names and displays:
 
-Runs PowerShell 7, WPF, and the reporting application.
-
-#### HCX Manager
-
-Provides:
-
-- Session authentication
-- Mobility-group summaries
-- VM migration records
-- Mobility intent information
-- Destination network mappings
-- Placement information
-- Service-mesh transport health
-- Path MTU data
-
-#### Output repository
-
-A timestamped local run folder stores reports, exports, logs, raw normalized data, and sanitized diagnostics.
-
-### Logical workflow
-
-```mermaid
-flowchart TD
-    A[Launch PowerShell 7 WPF application] --> B[Create timestamped run folder]
-    B --> C[Connect to HCX Manager]
-    C --> D[Select dates, wave name, estimate, and output path]
-    D --> E[Discover mobility reporting endpoint]
-    E --> F[Retrieve mobility groups]
-    F --> G[Retrieve VM migrations for each group]
-    G --> H[Filter by reporting period]
-    H --> I[Enrich destination network and placement]
-    I --> J[Retrieve transport and Path MTU data]
-    J --> K[Build report model]
-    K --> L[Export HTML, CSV, JSON, Excel, and manifest]
-    L --> M[Validate required artifacts]
-```
-
-## Application Workflow
-
-### Startup
-
-At launch, the application:
-
-1. Verifies PowerShell 7.
-2. Verifies STA apartment state.
-3. Relaunches in PowerShell 7 STA mode when required.
-4. Verifies Windows.
-5. Loads WPF assemblies.
-6. Creates the initial run directory.
-7. Starts application logging.
-8. Attempts to start a PowerShell transcript.
-
-### Connection
-
-The operator enters:
-
-- HCX Manager
-- Username
-- Password
-
-The script posts to the HCX session endpoint and retrieves the `x-hm-authorization` response header. The token remains in memory and is added to subsequent REST requests.
-
-### Collection
-
-The collection workflow:
-
-1. Uses the configured vCenter GUID.
-2. Queries the HCX 9.1 mobility-group endpoint.
-3. Converts each response into a mobility-group summary.
-4. Queries VM-level migrations for each group.
-5. Normalizes each VM record.
-6. applies the selected date range.
-7. Enriches VM records with mobility intent data.
-8. Retrieves Transport Analytics and Path MTU data.
-9. Builds reports and exports.
-
-## Reporting Scope
-
-### Start and end dates
-
-The selected start date begins at the start of the selected day. The end date includes the full selected day through `23:59:59`.
-
-A VM record is included when the effective migration timestamp falls within the selected reporting range.
-
-### Wave Name
-
-The Wave Name appears in:
-
-- Browser title
-- Report heading
-- Wave completion section
-- Executive summary
-- Summary CSV
-- WPF completion status
-
-Example:
-
-```text
-Wave 0 - HCX 9.1 Mobility Executive Summary
-```
-
-### Estimated Wave VMs
-
-The operator-entered estimate must be a whole number greater than zero.
-
-The estimate is a planning value. The script does not derive the estimate from HCX.
-
-## Wave Completion
-
-Wave completion uses unique successfully migrated VM names:
-
-```text
-Wave Completion Percentage =
-Unique Successfully Migrated VM Names / Estimated Wave VMs x 100
-```
-
-### Why unique VM names are used
-
-A VM can have more than one historical successful record. Counting unique names prevents a repeated migration from increasing wave completion more than once.
-
-### Values displayed
-
-- Unique VMs Completed
-- Estimated Wave VMs
-- Estimated Remaining
+- Unique VMs completed
+- Estimated wave VMs
+- Estimated VMs remaining
 - Completion percentage
+- Circular completion visualization
 
-When completed unique VMs exceed the estimate, the displayed percentage can exceed 100 percent, while the circular graphic remains visually capped at 100 percent.
+Repeated successful records for the same VM do not inflate wave completion.
 
-## Executive Metrics
+### Executive migration metrics
 
-### Mobility Groups
+The report header includes:
 
-Count of mobility-group summaries included in the selected reporting period.
+- Mobility Groups
+- Total Scheduled VMs
+- Successfully Migrated VMs
+- Error VMs
+- Cancelled VMs
+- Migrated vCPU
+- Migrated Memory in TB
+- Migrated Disk in TB
+- Average VM Migration Time
+- Maximum VM Migration Time
 
-### Total Scheduled VMs
+Resource totals use all successful migration records within the selected reporting period. Average and maximum migration times use individual successful VM durations, not mobility-group elapsed time.
 
-Sum of `TotalVMs` across the included mobility-group summaries.
+### Migration charts
 
-### Successfully Migrated VMs
+The HTML report includes:
 
-Count of successful VM migration records in the selected reporting period.
+- Daily Migrated VM Count
+- Top Five VMs by Migration Time
+- Top Five VMs by Storage Transferred
+- Top Five VMs by Compute Transfer Score
 
-This differs from the unique-VM wave completion count.
+Chart cards are sized for up to five displayed rows and avoid unnecessary horizontal scrolling.
 
-### Error VMs
+### Compute Transfer Score
 
-Sum of group-level VM error counts represented by the selected mobility-group summaries.
-
-### Cancelled VMs
-
-Sum of group-level cancelled VM counts represented by the selected mobility-group summaries.
-
-### Migrated vCPU
-
-Sum of vCPU across all successful VM migration records:
-
-```text
-Migrated vCPU = Sum of vCPU for successful migration records
-```
-
-### Migrated Memory
-
-Sum of memory bytes across all successful VM migration records, displayed in TB:
-
-```text
-Migrated Memory TB = Sum of successful VM MemoryBytes / 1 TB
-```
-
-### Migrated Disk
-
-Sum of provisioned storage bytes across all successful VM migration records, displayed in TB:
-
-```text
-Migrated Disk TB = Sum of successful VM StorageBytes / 1 TB
-```
-
-### Average VM Migration Time
-
-Average `DurationMinutes` across successful VM migration records.
-
-### Maximum VM Migration Time
-
-Largest `DurationMinutes` value among successful VM migration records.
-
-## Migration Status Classification
-
-A record is treated as migrated when the status matches successful terms such as:
-
-- Complete
-- Completed
-- Migrated
-- Success
-- Succeeded
-- Done
-
-A record is treated as an error record when:
-
-- The status matches error, failure, cancelled, or canceled terms, or
-- A nonempty error message is present
-
-### Later migrated correlation
-
-For an error record, the application checks whether the same VM has a later successful migration record. When found, the error table marks `LaterMigrated` as true.
-
-## Individual VM Timing
-
-### Timestamp selection
-
-The normalizer first reads VM progress timestamps. When unavailable, the normalizer uses other VM-level timestamp names. Group timestamps are fallback values.
-
-### Duration
-
-When a usable start and end time exist:
-
-```text
-DurationMinutes = EndTime - StartTime
-```
-
-When timestamps are unavailable, the script checks duration or elapsed-time fields.
-
-### Executive timing rule
-
-The executive average and maximum use only successful VM records. Group elapsed time remains visible in the Mobility Group Summary but is not used for the executive VM timing metrics.
-
-## Compute Transfer Score
-
-The score is calculated per successful VM record:
+The Compute Transfer Score is a comparative workload-effort index:
 
 ```text
 Compute Transfer Score = vCPU x max(Migration Minutes, 1)
 ```
 
-### Example
+Example:
 
 ```text
-VM configuration: 8 vCPU
-Migration duration: 45 minutes
-Compute Transfer Score: 360
+4 vCPU x 30 minutes = 120
 ```
 
-### Interpretation
+A higher score represents a larger combination of assigned vCPU and migration duration. The score is not network throughput, CPU utilization, HCX health, or a pass/fail rating.
 
-The score supports relative comparison. A higher score indicates a migration combining more assigned vCPU, longer duration, or both.
+### Transport Analytics
 
-The score is not:
+The report retrieves HCX service-mesh transport data and presents:
 
-- CPU utilization
-- CPU consumption
-- Network throughput
-- Storage throughput
-- HCX health
-- A migration efficiency grade
-- A pass/fail determination
-
-## Transport Analytics
-
-The application calls the HCX service-mesh health resource and retrieves measured transport data.
-
-### Fields
-
-- Uplink Name
-- Remote Uplink Name
-- Available Upload Mbps
-- Available Download Mbps
-- Latency milliseconds
-- Loss percentage
-- Service Health
-
-### Report layout
-
-Transport Analytics uses a compact dashboard:
-
-- Centered transport metrics
-- Upload and download bandwidth
+- Available upload bandwidth
+- Available download bandwidth
 - Latency
 - Packet loss
+- Uplink name
 - Current Path MTU
-- Service Health list on the right
+- HCX service health states
 
-On narrow displays, the layout changes to one column.
+Service health is displayed as a readable list alongside centered transport metrics.
 
-### Service states
+### Path MTU reporting
 
-The service list can include HCX migration services returned by the endpoint, such as:
+The toolkit maps the HCX Path MTU response fields as follows:
 
-- RAV
-- OSAM
-- BULK
-- VMOTION
+- `discoveredMtu` to Discovered MTU
+- `currentMtu` to Current MTU
+- `configuredMtu` to Configured MTU
+- `pmtuMetrics[].rxPmtu` to Receive Path MTU
+- `pmtuMetrics[].txPmtu` to Transmit Path MTU
 
-The report presents the values returned by HCX.
-
-## Path MTU
-
-### Endpoint
+The service-mesh Path MTU request uses:
 
 ```text
 /hybridity/api/interconnect/underlay/pmtu/serviceMesh/{serviceMeshId}?vcGuid={vcGuid}
 ```
 
-### Correlation
+### Destination network and placement reporting
 
-The application correlates a transport row with a Path MTU item by:
-
-1. Matching the local uplink name.
-2. Matching the remote uplink name if the local name does not match.
-3. Leaving MTU fields empty when no reliable match exists.
-
-### Field mapping
-
-```text
-discoveredMtu          -> Discovered MTU
-currentMtu             -> Current MTU
-configuredMtu          -> Configured MTU
-pmtuMetrics[].rxPmtu   -> Receive Path MTU
-pmtuMetrics[].txPmtu   -> Transmit Path MTU
-```
-
-### Failure behavior
-
-Path MTU collection is optional. If the Path MTU request fails, Transport Analytics can still display bandwidth, latency, packet loss, and service health.
-
-## Network Mapping and Placement
-
-### Mobility intent lookup
-
-The application uses the mobility intent response to collect:
+The toolkit enriches VM records with HCX mobility intent information, including:
 
 - Destination network name
-- Destination network ID
+- Destination network identifier
 - Destination network type
-- Source network name
+- Source-to-destination network mapping
 - Destination placement
 
-### Mapping format
+For a successful VM record without a populated destination network, the report can use another collected record for the same VM entity ID or VM name. The report omits empty optional network content rather than displaying invalid placeholders.
 
-When source and destination names are both available:
+### Scrollable detail tables
 
-```text
-SourceNetwork to DestinationNetwork
+Detailed report sections use fixed-height, independently scrollable table regions with:
+
+- Vertical scrolling
+- Horizontal scrolling for wide datasets
+- Sticky headers
+- Nonwrapping cells
+- Scroll containment
+
+This supports production waves containing long VM, mobility-group, network, and error lists.
+
+## Requirements
+
+- Windows workstation or administrative desktop
+- PowerShell 7 or later
+- Interactive desktop session
+- STA apartment state for WPF
+- HTTPS connectivity to the HCX Manager
+- HCX account with permission to read the required reporting resources
+- Write access to the script directory or selected output base path
+- Optional `ImportExcel` PowerShell module for `.xlsx` output
+
+The script relaunches itself in PowerShell 7 STA mode when needed.
+
+## Installation
+
+1. Download the release script.
+2. Save the script to an approved administrative directory, such as `C:\Script`.
+3. Optionally install the `ImportExcel` module if Excel output is required.
+4. Open PowerShell 7 in an interactive Windows session.
+5. Run the script according to organizational execution-policy and code-signing requirements.
+
+```powershell
+Set-Location C:\Script
+
+& '.\HCX91_Mobility_Analytics_Executive_Report_Rev_1.0.ps1'
 ```
 
-The application does not display empty arrows or bracket placeholders.
+## Usage
 
-### Successful VM fallback
+### 1. Connect to HCX
 
-When a successful VM record has no destination network, the report checks another collected record using:
+Enter:
 
-1. The same VM entity ID
-2. The same VM name
+- HCX Manager FQDN or IP address
+- HCX username
+- HCX password
 
-The most recent matching record with a populated network can supply the display value.
+Select **Connect**. The application authenticates through the HCX session workflow and retains the session token in memory.
 
-### Conditional section
+### 2. Define the reporting scope
 
-If no valid network rows exist, the VM Network Mappings and Placement section is omitted.
+Select:
 
-## Charts
+- Start Date
+- End Date
+- Output Base folder
+- Wave Name
+- Estimated Wave VMs
 
-### Daily Migrated VM Count
+The estimated wave total must be a whole number greater than zero.
 
-Groups successful VM records by completion date.
+### 3. Generate the report
 
-### Top Five VMs by Migration Time
+Select **Collect and Generate Reports**.
 
-Sorts successful VM records by `DurationMinutes` descending and displays the first five.
+The application:
 
-### Top Five VMs by Storage Transferred
+1. Discovers the HCX mobility-group reporting endpoint.
+2. Retrieves mobility-group summaries.
+3. Retrieves VM-level migration records for each group.
+4. Filters records to the selected reporting period.
+5. Enriches network and placement information.
+6. Retrieves service-mesh transport and Path MTU information.
+7. Builds the report model and exports all artifacts.
+8. Validates required artifacts before reporting success.
 
-Sorts successful VM records by `StorageBytes` descending and displays the first five.
+### 4. Review output
 
-### Top Five VMs by Compute Transfer Score
+Use:
 
-Sorts successful VM records by `ComputeScore` descending and displays the first five.
+- **Open HTML** to open the executive report
+- **Open Run Folder** to open the complete evidence directory
 
-### Sizing
+## Output Directory Structure
 
-Chart cards are prepared for five rows and use vertical overflow protection. Horizontal scrolling is disabled for chart cards.
-
-## Scrollable Tables
-
-Every table returned by the shared HTML table function is enclosed in `tablewrap`.
-
-The release uses:
-
-```css
-.tablewrap {
-    height: 300px;
-    max-height: 300px;
-    overflow-x: auto;
-    overflow-y: scroll;
-    max-width: 100%;
-    scrollbar-gutter: stable both-edges;
-    overscroll-behavior: contain;
-}
-```
-
-### Operator controls
-
-When the pointer is over a table:
-
-- Mouse wheel scrolls vertically
-- Vertical scrollbar can be dragged
-- Horizontal scrollbar reveals additional columns
-- Page Up and Page Down can be used when the table has focus
-
-### Sticky headers
-
-Column headings remain visible:
-
-```css
-th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-}
-```
-
-## Exports and Artifacts
-
-### Run folder
+Each application launch creates a timestamped directory:
 
 ```text
 HCX91-Mobility-Analytics-Run-YYYYMMDD-HHMMSS
 ```
 
-### Logs
+Expected structure:
 
-- Main application log
-- PowerShell transcript
-
-### Debug-Artifacts
-
-Sanitized REST requests, responses, failures, endpoint evidence, and exceptions.
-
-### Raw-API
-
-Normalized source collection and supporting raw response data.
+```text
+HCX91-Mobility-Analytics-Run-YYYYMMDD-HHMMSS/
+├── Configuration/
+├── Debug-Artifacts/
+├── Exports/
+├── Logs/
+├── Raw-API/
+└── Reports/
+```
 
 ### Reports
 
 - Executive HTML report
-- Artifact manifest
+- Artifact manifest with SHA-256 hashes
 
 ### Exports
 
-- Raw CSV
+- Raw migration CSV
 - Summary CSV
-- Daily CSV
-- Daily Guest OS CSV where retained
+- Daily migration CSV
+- Daily Guest OS CSV, when retained by the release
 - Mobility Group Summary CSV
-- Excel workbook when available
+- Excel workbook when `ImportExcel` is available
 
-### Artifact validation
+### Logs and evidence
 
-Before success is reported, the application verifies that required output files:
+- Application log
+- PowerShell transcript
+- Sanitized REST request artifacts
+- Sanitized REST response artifacts
+- Endpoint-discovery evidence
+- Raw normalized collection JSON
 
-- Exist
-- Are files
-- Have a nonzero length
+## Excel Workbook
 
-The manifest includes:
+When `ImportExcel` is installed, the workbook includes worksheets for:
 
-- File name
-- Full path
-- Length
-- SHA-256 hash
-- Last write time
+- All Migrations
+- Migrated
+- Errors
+- Daily
+- Daily Guest OS
+- Mobility Groups
 
-## Logging and Sanitization
+If `ImportExcel` is unavailable or Excel generation fails, CSV and HTML outputs remain available.
 
-### Log levels
+## Security
 
-- `PASS`
-- `INFO`
-- `WARN`
-- `ERROR`
-- `DEBUG`
-
-### Sanitized values
-
-Diagnostic sanitization targets:
-
-- Passwords
-- Tokens
-- Access tokens
-- Refresh tokens
-- Authorization headers
-- `x-hm-authorization`
-- Cookies
-- CSRF and XSRF values
-- Active password text
-
-### Debug mode
-
-Debug logging is enabled by default and can be controlled through the WPF interface.
-
-## Operator Runbook
-
-### Step 1: Launch
-
-```powershell
-Set-Location C:\Script
-& '.\HCX91_Mobility_Analytics_Executive_Report_Rev_1.0.ps1'
-```
-
-### Step 2: Connect
-
-Enter the HCX Manager, username, and password, then select **Connect**.
-
-### Step 3: Select dates
-
-Choose the reporting start and end dates.
-
-### Step 4: Select output location
-
-Use **Select Folder** when the report should be written somewhere other than the launch directory.
-
-### Step 5: Enter wave information
-
-Example:
-
-```text
-Wave Name: Wave 0
-Estimated Wave VMs: 100
-```
-
-### Step 6: Generate reports
-
-Select **Collect and Generate Reports**.
-
-### Step 7: Review status
-
-Confirm that the status displays wave progress and error-record count.
-
-### Step 8: Open output
-
-Select **Open HTML** and **Open Run Folder**.
-
-### Step 9: Archive evidence
-
-Retain the report, manifest, logs, and required supporting exports according to the change or audit process.
+- Passwords and tokens are not intentionally written to disk.
+- Diagnostic artifacts pass through sanitization designed to mask credentials, tokens, authorization headers, cookies, and the active password.
+- HCX session information remains in memory for the active application session.
+- Output artifacts can contain infrastructure names, VM names, managed object identifiers, network names, service-mesh identifiers, error details, and administrative endpoints.
+- Treat every run folder as sensitive operational data.
+- Do not commit production run folders, logs, raw API captures, CSV files, JSON artifacts, or reports to a public repository.
 
 ## Troubleshooting
 
-### Parser error
+### PowerShell 7 is required
 
-Use the exact released script. Validate the complete file after any edit:
+Install PowerShell 7 or run the script from a system where `pwsh.exe` is available.
 
-```powershell
-$tokens = $null
-$errors = $null
+### WPF or STA error
 
-[System.Management.Automation.Language.Parser]::ParseFile(
-    '.\HCX91_Mobility_Analytics_Executive_Report_Rev_1.0.ps1',
-    [ref]$tokens,
-    [ref]$errors
-) | Out-Null
+Run the application from an interactive Windows session. The script cannot run as a Linux utility or in a noninteractive service context.
 
-$errors
-```
+### HCX authentication fails
 
-Any modification can invalidate a digital signature and should be followed by approved re-signing.
+- Confirm the HCX Manager address.
+- Confirm TCP 443 connectivity.
+- Re-enter the username and password.
+- Confirm the account can create an HCX API session.
+- Review the application log and sanitized REST artifacts.
 
-### Authentication failure
+### No mobility records are returned
 
-Review:
+- Confirm the selected date range.
+- Confirm the configured vCenter GUID matches the HCX environment.
+- Confirm the account can read mobility groups and migrations.
+- Review endpoint-discovery evidence and REST responses.
 
-- HCX address
-- TCP 443 connectivity
-- Username and password
-- Main log
-- Sanitized session request and response artifacts
+### Path MTU is blank
 
-### Empty report
+- Confirm Transport Analytics returned a service-mesh ID.
+- Review the Path MTU REST request and response artifacts.
+- Confirm the response includes matching local or remote uplink names.
+- Confirm the response includes `currentMtu`, `configuredMtu`, `discoveredMtu`, and `pmtuMetrics`.
 
-Confirm:
+### Destination network is blank
 
-- Date range
-- HCX mobility-group data exists in the range
-- Configured vCenter GUID is correct
-- Account permissions
-- Endpoint discovery result
+Network information appears only when HCX returns a usable mobility-intent mapping or another collected record for the same VM provides a reliable destination network.
 
-### Transport Analytics unavailable
+### Excel output is missing
 
-Review the `serviceMeshHealth` REST artifact. Confirm `uplinkMetrics`, `measuredData`, and `maxAvailableBandwidth` are present.
-
-### MTU unavailable
-
-Review the Path MTU REST request. Confirm:
-
-- Service mesh ID is populated
-- HTTP response is successful
-- Uplink names correlate
-- MTU fields exist
-
-### Destination network unavailable
-
-Review the mobility intent response for:
-
-- `networkParams`
-- `networkMappings`
-- `srcNetworkName`
-- `destNetworkName`
-- `destNetworkId`
-- `destNetworkType`
-
-### Large tables
-
-Use the vertical scrollbar inside each table. Use the horizontal scrollbar for additional columns. The primary page and each table scroll independently.
-
-### Excel export failure
-
-Review the main log. CSV and HTML outputs remain the primary fallback when the optional Excel module is unavailable.
-
-## Security and Change Control
-
-- Run from an approved Windows administrative workstation.
-- Restrict access to the script and output directory.
-- Never publish production endpoints, VM names, logs, reports, or raw API captures without sanitization.
-- Retain the previous script release for rollback.
-- Test revisions in a nonproduction HCX 9.1 environment.
-- Run a full PowerShell parser check before release.
-- Use PSScriptAnalyzer according to organizational standards.
-- Sign the final script through the approved code-signing process.
-- Attach a checksum to the release.
-
-## Maintainer Notes
-
-### Versioning
-
-Keep these values aligned:
-
-- Released filename
-- `.SYNOPSIS` revision
-- `$script:AppVersion`
-- Report footer version
-- Git tag
-- GitHub release title
-- README release
-- Wiki release notes
-
-For the final 1.0 release, set:
+Install the optional module:
 
 ```powershell
-$script:AppVersion = '1.0'
+Install-Module ImportExcel -Scope CurrentUser
 ```
 
-### Parser validation
+Rerun the report after the module is available.
 
-Run before every commit that changes PowerShell:
+### Table requires additional rows
 
-```powershell
-$tokens = $null
-$errors = $null
-[System.Management.Automation.Language.Parser]::ParseFile(
-    $Path,
-    [ref]$tokens,
-    [ref]$errors
-) | Out-Null
-
-if ($errors.Count -gt 0) {
-    $errors | Format-List
-    throw 'PowerShell parser validation failed.'
-}
-```
-
-### Suggested CI checks
-
-- PowerShell parser validation
-- PSScriptAnalyzer
-- Secret scanning
-- File-name and embedded-version consistency
-- Required-function presence
-- Required report-label presence
-- No production test data in examples
-
-### Release artifacts
-
-Recommended release attachments:
-
-- Final `.ps1` script
-- SHA-256 checksum
-- README
-- Wiki source
-- Sanitized example report
-- Sanitized screenshots
+All HTML tables have independent vertical and horizontal scrolling. Move the pointer over the table and use the mouse wheel, scrollbar, Page Up, or Page Down.
 
 ## Release Notes
 
 ### Release 1.0
 
-- Initial public repository release of the HCX 9.1 Mobility Analytics and Executive Reporting Toolkit.
-- Added WPF connection and reporting interface.
-- Added date and wave scope.
-- Added wave completion visualization.
-- Added mobility-group and VM-level collection.
-- Added migrated resource totals.
-- Added individual VM migration timing.
+- Added PowerShell 7 WPF operator interface.
+- Added HCX REST authentication using the HCX session workflow.
+- Added per-launch run folders.
+- Added sanitized debug logging and PowerShell transcripts.
+- Added mobility-group discovery and VM-level migration collection.
+- Added date filtering.
+- Added Wave Name and Estimated Wave VMs inputs.
+- Added unique-VM wave completion reporting.
+- Added executive metrics for migration status and migrated resources.
+- Added migrated memory and disk totals in TB.
+- Added individual VM average and maximum migration time.
 - Added daily and Top Five charts.
-- Added Compute Transfer Score guidance.
-- Added Transport Analytics and Service Health.
-- Added Path MTU data.
-- Added destination network and placement reporting.
-- Added error and later-recovery correlation.
-- Added scrollable report tables with sticky headers.
-- Added HTML, CSV, JSON, Excel, and artifact manifest output.
-- Added sanitized diagnostics and transcript logging.
-- Added artifact existence, size, and SHA-256 validation.
+- Added Compute Transfer Score and administrator guidance.
+- Added service-mesh transport analytics.
+- Added Path MTU collection and mapping.
+- Added destination network and placement enrichment.
+- Added error-recovery correlation.
+- Added independently scrollable detail tables.
+- Added CSV, JSON, HTML, Excel, and artifact-manifest output.
+- Added physical artifact validation and SHA-256 manifest generation.
+
+## Recommended Repository Layout
+
+```text
+/
+├── HCX91_Mobility_Analytics_Executive_Report_Rev_1.0.ps1
+├── README.md
+├── Wiki.md
+├── LICENSE
+├── screenshots/
+│   ├── application.png
+│   └── executive-report.png
+└── examples/
+    └── README.md
+```
+
+Use synthetic or sanitized values in all examples and screenshots.
+
+## Support and Contributions
+
+When reporting an issue, include:
+
+- PowerShell version
+- Windows version
+- HCX build information
+- Script release
+- Sanitized application log
+- Sanitized exception artifact
+- Relevant sanitized REST response shape
+- Clear reproduction steps
+
+Remove credentials, tokens, customer names, infrastructure addresses, and other sensitive information before sharing evidence.
 
